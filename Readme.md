@@ -10,6 +10,7 @@ This ProcessWire module provides integration with Jira to manage and sync tasks 
 - Filter and search Jira tasks
 - Update task status and comments
 - Assign tasks to users
+- Export Jira tasks and reports to Excel format
 
 ## Installation
 
@@ -37,6 +38,7 @@ Once installed and configured:
 3. Create, update, and sync tasks between systems
 4. Filter tasks by status, priority, or assignee
 5. Add comments and update task status
+6. Export filtered tasks or reports to Excel spreadsheets
 
 ## Requirements
 
