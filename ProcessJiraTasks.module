@@ -51,7 +51,8 @@ class ProcessJiraTasks extends Process implements Module, ConfigurableModule
       'Key',
       'Assignee',
       'Status',
-      'Priority',
+      'Title',
+      'Tag',
       'Due Date',
       'Last Updated',
       'Actions'
@@ -65,7 +66,8 @@ class ProcessJiraTasks extends Process implements Module, ConfigurableModule
           $task['key'],
           isset($task['fields']['assignee']['displayName']) ? $task['fields']['assignee']['displayName'] : 'Unassigned',
           $task['fields']['status']['name'],
-          $task['fields']['priority']['name'],
+          $task['fields']['summary'],
+          $task['fields']['project']['name'],
           isset($task['fields']['duedate']) ? wireDate('d.m.Y', strtotime($task['fields']['duedate'])) : '-',
           isset($task['fields']['updated']) ? wireDate('d.m.Y', strtotime($task['fields']['updated'])) : '-',
           "<a href='{$this->jira_domain}/browse/{$task['key']}' target='_blank'><i class='fa fa-external-link'></i> View in Jira</a>"
@@ -113,6 +115,16 @@ class ProcessJiraTasks extends Process implements Module, ConfigurableModule
 
     // Set default value to 'currentUser' if no filter is selected
     $f->value = $this->input->get->assignee ?: 'currentUser';
+    $form->add($f);
+
+    $f = $this->modules->get('InputfieldSelect');
+    $f->name = 'updated';
+    $f->label = 'Filter by Last Updated';
+    $f->addOption('', 'All Time');
+    $f->addOption('1d', 'Last 24 Hours');
+    $f->addOption('7d', 'Last 7 Days');
+    $f->addOption('30d', 'Last 30 Days');
+    $f->value = $this->input->get->updated ?: '';
     $form->add($f);
 
     // Submit button
@@ -207,6 +219,11 @@ class ProcessJiraTasks extends Process implements Module, ConfigurableModule
       } else {
         $jql .= " AND assignee = '" . $this->wire('sanitizer')->entities($this->input->get->assignee) . "'";
       }
+    }
+
+    if ($this->input->get->updated) {
+      $days = (int) str_replace('d', '', $this->input->get->updated);
+      $jql .= " AND updated >= startOfDay(-{$days}d)";
     }
 
     $jql .= " ORDER BY priority DESC";
