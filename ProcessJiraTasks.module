@@ -1,0 +1,326 @@
+<?php
+
+namespace ProcessWire;
+
+class ProcessJiraTasks extends Process implements Module, ConfigurableModule
+{
+
+  public static function getModuleInfo()
+  {
+    return array(
+      'title' => 'Jira Tasks Manager',
+      'version' => '1.0.0',
+      'summary' => 'Manages Jira tasks with user relationships',
+      'icon' => 'tasks',
+      'requires' => array('ProcessWire>=3.0.0'),
+      'permission' => 'jira-tasks',
+      'page' => array(
+        'name' => 'jira-tasks',
+        'parent' => 'setup',
+        'title' => 'Jira Tasks'
+      )
+    );
+  }
+
+  public function init()
+  {
+    parent::init();
+  }
+  public function ___execute()
+  {
+    // Get tasks first to have the data
+    $tasks = $this->getJiraTasks();
+
+    // Create debug info display
+    $debugInfo = "<div class='uk-margin uk-card uk-card-default uk-card-body uk-margin-bottom'>";
+    $debugInfo .= "<h4>API Debug Info</h4>";
+    $debugInfo .= "<pre class='uk-background-muted uk-padding-small'>";
+
+
+    $debugInfo .= "URL: <a href='" . $this->jira_domain . "/rest/api/3/search' target='_blank'>" . $this->jira_domain . "/rest/api/3/search</a>\n\n";
+    $debugInfo .= "Response: \n" . json_encode($tasks, JSON_PRETTY_PRINT);
+    $debugInfo .= "</pre></div>";
+
+    // Existing button
+    $addNewButton = "<p><a class='uk-button uk-button-primary' href='{$this->pages->get(2)->url}module/edit?name=ProcessJiraTasks'><i class='fa fa-cog'></i> Configure Jira Settings</a></p>";
+
+    // Create and populate table
+    $table = $this->modules->get('MarkupAdminDataTable');
+    $table->encodeEntities = false;
+    $table->headerRow(array(
+      'Key',
+      'Assignee',
+      'Status',
+      'Priority',
+      'Due Date',
+      'Last Updated',
+      'Actions'
+    ));
+
+    $tasks = $this->getJiraTasks();
+
+    if (isset($tasks['issues'])) {
+      foreach ($tasks['issues'] as $task) {
+        $table->row(array(
+          $task['key'],
+          isset($task['fields']['assignee']['displayName']) ? $task['fields']['assignee']['displayName'] : 'Unassigned',
+          $task['fields']['status']['name'],
+          $task['fields']['priority']['name'],
+          isset($task['fields']['duedate']) ? wireDate('d.m.Y', strtotime($task['fields']['duedate'])) : '-',
+          isset($task['fields']['updated']) ? wireDate('d.m.Y', strtotime($task['fields']['updated'])) : '-',
+          "<a href='{$this->jira_domain}/browse/{$task['key']}' target='_blank'><i class='fa fa-external-link'></i> View in Jira</a>"
+        ));
+      }
+    }
+
+    // Add filter form
+    $filterForm = $this->buildFilterForm();
+
+    // In ___execute() method, add before returning the interface:
+    if ($this->input->get->export == 1) {
+      $this->exportToExcel($tasks);
+    }
+
+    // Add export button next to the existing button
+    $addNewButton .= " <a class='uk-button uk-button-secondary' href='?export=1'><i class='fa fa-download'></i> Export to Excel</a>";
+
+    // Return complete interface
+    return $filterForm . $addNewButton . $table->render();
+  }
+
+
+  protected function buildFilterForm()
+  {
+    $form = $this->modules->get('InputfieldForm');
+    $form->method = 'get';
+    $form->action = './';
+
+    $f = $this->modules->get('InputfieldSelect');
+    $f->name = 'assignee';
+    $f->label = 'Filter by Assignee';
+    $f->addOption('', 'All Users');
+    // Add "Assigned to me" as first option
+    $f->addOption('currentUser', 'Assigned to me');
+
+    $users = $this->getJiraUsers();
+    usort($users, function ($a, $b) {
+      return strcasecmp($a['displayName'], $b['displayName']);
+    });
+
+    foreach ($users as $user) {
+      $f->addOption($user['displayName'], $user['displayName']);
+    }
+
+    // Set default value to 'currentUser' if no filter is selected
+    $f->value = $this->input->get->assignee ?: 'currentUser';
+    $form->add($f);
+
+    // Submit button
+    $f = $this->modules->get('InputfieldSubmit');
+    $f->value = 'Apply Filters';
+    $f->icon = 'filter';
+    $form->add($f);
+
+    return $form->render();
+  }
+  public function getModuleConfigInputfields(InputfieldWrapper $inputfields)
+  {
+    $f = $this->modules->get('InputfieldText');
+    $f->name = 'jira_domain';
+    $f->label = 'Jira Domain';
+    $f->required = true;
+    $f->columnWidth = 25;
+    $f->value = $this->jira_domain;
+    $inputfields->add($f);
+
+    $f = $this->modules->get('InputfieldText');
+    $f->name = 'jira_email';
+    $f->label = 'Jira Account Email';
+    $f->required = true;
+    $f->columnWidth = 25;
+    $f->value = $this->jira_email;
+    $inputfields->add($f);
+
+    $f = $this->modules->get('InputfieldText');
+    $f->name = 'jira_api_token';
+    $f->label = 'Jira API Token';
+    $f->required = true;
+    $f->columnWidth = 25;
+    $f->value = $this->jira_api_token;
+    $inputfields->add($f);
+
+    $f = $this->modules->get('InputfieldText');
+    $f->name = 'jira_project_key';
+    $f->label = 'Default Jira Project Key';
+    $f->required = true;
+    $f->columnWidth = 25;
+    $f->notes = 'Example: PROJ';
+    $f->value = $this->jira_project_key;
+    $inputfields->add($f);
+
+    return $inputfields;
+  }
+  public function ___install()
+  {
+    // Create parent page for Jira Tasks in admin
+    $p = new Page();
+    $p->template = 'admin';
+    $p->parent = $this->pages->get(2); // Admin parent
+    $p->name = 'jira-tasks';
+    $p->title = 'Jira Tasks';
+    $p->process = $this;
+    $p->save();
+  }
+
+  public function ___uninstall()
+  {
+    // Remove the Jira Tasks admin page
+    $p = $this->pages->get('name=jira-tasks, template=admin');
+    if ($p->id) $p->delete();
+  }
+
+  protected function getJiraTasks()
+  {
+    $jiraConfig = [
+      'domain' => $this->modules->getConfig($this, 'jira_domain'),
+      'api_token' => $this->modules->getConfig($this, 'jira_api_token'),
+      'project_key' => $this->modules->getConfig($this, 'jira_project_key'),
+      'email' => $this->modules->getConfig($this, 'jira_email')
+    ];
+
+    // Add API token validation
+    if (empty($jiraConfig['api_token'])) {
+      $this->error("Jira API token is not configured. Please add it in module settings.");
+      return ['issues' => []];
+    }
+
+    // Build JQL query based on filters
+
+    $jql = "project = {$jiraConfig['project_key']}";
+    if ($this->input->get->status) {
+      $jql .= " AND status = '{$this->input->get->status}'";
+    }
+
+    if ($this->input->get->assignee) {
+      if ($this->input->get->assignee === 'currentUser') {
+        $jql .= " AND assignee = '" . $this->wire('sanitizer')->entities($this->jira_email) . "'";
+      } else {
+        $jql .= " AND assignee = '" . $this->wire('sanitizer')->entities($this->input->get->assignee) . "'";
+      }
+    }
+
+    $jql .= " ORDER BY priority DESC";
+
+    // Setup cURL request
+    $curl = curl_init();
+    curl_setopt_array($curl, [
+      CURLOPT_URL => "{$jiraConfig['domain']}/rest/api/3/search?jql=" . urlencode($jql),
+      CURLOPT_RETURNTRANSFER => true,
+      CURLOPT_HTTPHEADER => [
+        'Authorization: Basic ' . base64_encode("{$jiraConfig['email']}:{$jiraConfig['api_token']}"),
+        'Content-Type: application/json',
+        'Accept: application/json'
+      ]
+
+    ]);
+    $response = curl_exec($curl);
+    if (curl_errno($curl)) {
+      $this->log->save('jira-tasks', "Curl Error: " . curl_error($curl));
+    }
+    $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    curl_close($curl);
+
+    if ($httpCode === 200) {
+      $data = json_decode($response, true);
+
+      // Create detailed console log
+      $this->log->save(
+        'jira-tasks',
+        "Jira API Response:\n" .
+          "Total Issues: " . count($data['issues']) . "\n" .
+          "JQL Query: " . $jql . "\n" .   // This shows the URL query parameters
+          "Response Code: " . $httpCode . "\n" .
+          "CURL URL: " . "{$jiraConfig['domain']}/rest/api/3/search?" . urlencode($jql) . "\n" .
+          "Full Response: " . print_r($data, true)
+
+      );
+      return $data;
+    }
+
+    return ['issues' => []];
+  }
+
+
+  protected function exportToExcel($tasks)
+  {
+    // Use ProcessWire's root path to locate vendor directory
+    $vendorPath = $this->wire('config')->paths->root . 'vendor/autoload.php';
+    require_once($vendorPath);
+
+    $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+    $sheet = $spreadsheet->getActiveSheet();
+
+    // Add headers
+    $headers = ['Key', 'Assignee', 'Status', 'Priority', 'Due Date'];
+    $sheet->fromArray([$headers], NULL, 'A1');
+
+    // Add data rows
+    $row = 2;
+    foreach ($tasks['issues'] as $task) {
+      $data = [
+        $task['key'],
+        isset($task['fields']['assignee']['displayName']) ? $task['fields']['assignee']['displayName'] : 'Unassigned',
+        $task['fields']['status']['name'],
+        $task['fields']['priority']['name'],
+        isset($task['fields']['duedate']) ? date('d.m.Y', strtotime($task['fields']['duedate'])) : '-'
+      ];
+      $sheet->fromArray([$data], NULL, 'A' . $row);
+      $row++;
+    }
+
+    // Auto-size columns
+    foreach (range('A', 'E') as $col) {
+      $sheet->getColumnDimension($col)->setAutoSize(true);
+    }
+
+    // Create Excel file
+    $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+    $filename = 'jira-tasks-' . date('Y-m-d') . '.xlsx';
+
+    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    header('Content-Disposition: attachment;filename="' . $filename . '"');
+    header('Cache-Control: max-age=0');
+
+    $writer->save('php://output');
+    exit;
+  }
+
+  protected function getJiraUsers()
+  {
+    $jiraConfig = [
+      'domain' => $this->modules->getConfig($this, 'jira_domain'),
+      'api_token' => $this->modules->getConfig($this, 'jira_api_token'),
+      'email' => $this->modules->getConfig($this, 'jira_email')
+    ];
+
+    $curl = curl_init();
+    curl_setopt_array($curl, [
+      CURLOPT_URL => "{$jiraConfig['domain']}/rest/api/3/users/search?maxResults=1000&includeInactive=true",
+      CURLOPT_RETURNTRANSFER => true,
+      CURLOPT_HTTPHEADER => [
+        'Authorization: Basic ' . base64_encode("{$jiraConfig['email']}:{$jiraConfig['api_token']}"),
+        'Content-Type: application/json',
+        'Accept: application/json'
+      ]
+    ]);
+
+    $response = curl_exec($curl);
+    $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    curl_close($curl);
+
+    if ($httpCode === 200) {
+      return json_decode($response, true);
+    }
+    return [];
+  }
+}
