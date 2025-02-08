@@ -41,8 +41,15 @@ class ProcessJiraTasks extends Process implements Module, ConfigurableModule
     $debugInfo .= "Response: \n" . json_encode($tasks, JSON_PRETTY_PRINT);
     $debugInfo .= "</pre></div>";
 
-    // Existing button
-    $addNewButton = "<p><a class='uk-button uk-button-primary' href='{$this->pages->get(2)->url}module/edit?name=ProcessJiraTasks'><i class='fa fa-cog'></i> Configure Jira Settings</a></p>";
+    // Replace the existing button code with:
+    $tableHeadButtons = "<div class='uk-flex uk-flex-row uk-margin'>
+        <a class='uk-button uk-button-primary uk-margin-right' href='{$this->pages->get(2)->url}module/edit?name=ProcessJiraTasks'>
+            <i class='fa fa-cog'></i> Configure Jira Settings
+        </a>
+        <a class='uk-button uk-button-secondary' href='?export=1'>
+            <i class='fa fa-download'></i> Export to Excel
+        </a>
+    </div>";
 
     // Create and populate table
     $table = $this->modules->get('MarkupAdminDataTable');
@@ -83,11 +90,8 @@ class ProcessJiraTasks extends Process implements Module, ConfigurableModule
       $this->exportToExcel($tasks);
     }
 
-    // Add export button next to the existing button
-    $addNewButton .= " <a class='uk-button uk-button-secondary' href='?export=1'><i class='fa fa-download'></i> Export to Excel</a>";
-
     // Return complete interface
-    return $filterForm . $addNewButton . $table->render();
+    return "<div class='uk-card uk-card-default uk-card-body'>" . $filterForm . $tableHeadButtons . $table->render() . "</div>";
   }
 
 
@@ -221,9 +225,9 @@ class ProcessJiraTasks extends Process implements Module, ConfigurableModule
       }
     }
 
-    if ($this->input->get->updated) {
-      $days = (int) str_replace('d', '', $this->input->get->updated);
-      $jql .= " AND updated >= startOfDay(-{$days}d)";
+    if ($this->input->get->comments) {
+      $days = (int) str_replace('d', '', $this->input->get->comments);
+      $jql .= " AND comment was not null AND comment[after startOfDay(-{$days}d)]";
     }
 
     $jql .= " ORDER BY priority DESC";
